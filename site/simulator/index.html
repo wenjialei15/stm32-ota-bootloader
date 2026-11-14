@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OTA 模拟器 — 断电也不变砖</title>
+    <meta
+      name="description"
+      content="在浏览器里模拟 STM32 A/B 双槽 OTA：Flash 分区、元数据双备份、启动决策、试运行与自动回滚。"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%230a0e14'/><rect x='18' y='30' width='64' height='14' rx='3' fill='%233fb950'/><rect x='18' y='52' width='28' height='14' rx='3' fill='%232f81f7'/><rect x='54' y='52' width='28' height='14' rx='3' fill='%232f81f7'/></svg>"
+    />
+    <style>
+      :root {
+        --bg: #0a0e14;
+        --surface: #111720;
+        --surface-2: #161d28;
+        --border: #1f2937;
+        --border-soft: #18202b;
+        --text: #e2e8f0;
+        --dim: #94a3b8;
+        --faint: #64748b;
+        --green: #3fb950;
+        --blue: #2f81f7;
+        --amber: #d29922;
+        --red: #f85149;
+        --purple: #a371f7;
+        --mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, ui-monospace, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 13px;
+        line-height: 1.6;
+        overflow: hidden;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 12px 20px;
+        border-bottom: 1px solid var(--border-soft);
+        flex: 0 0 auto;
+        background: var(--surface);
+      }
+
+      .brand {
+        font-family: var(--mono);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+
+      .brand span {
+        color: var(--green);
+      }
+
+      .sub {
+        color: var(--faint);
+        font-size: 12px;
+      }
+
+      header a {
+        margin-left: auto;
+        color: var(--dim);
+        text-decoration: none;
+        font-family: var(--mono);
+        font-size: 12px;
+        border: 1px solid var(--border);
+        padding: 4px 12px;
+        border-radius: 6px;
+        white-space: nowrap;
+      }
+
+      header a:hover {
+        color: var(--green);
+        border-color: var(--green);
+      }
+
+      main {
+        flex: 1 1 auto;
+        display: grid;
+        grid-template-columns: 300px minmax(280px, 1fr) minmax(320px, 1.1fr);
+        gap: 1px;
+        background: var(--border-soft);
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .col {
+        background: var(--bg);
+        padding: 16px 18px;
+        overflow-y: auto;
+        min-height: 0;
+      }
+
+      .col::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      .col::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 4px;
+      }
+
+      h2 {
+        font-size: 11px;
+        font-family: var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--faint);
+        font-weight: 500;
+        margin: 0 0 12px;
+      }
+
+      /* ---- Flash 网格 ---- */
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 3px;
+        margin-bottom: 6px;
+      }
+
+      .cell {
+        aspect-ratio: 1;
+        border-radius: 3px;
+        background: #0e131a;
+        border: 1px solid #1a2129;
+        position: relative;
+        transition: background 0.25s, border-color 0.25s, box-shadow 0.25s;
+        cursor: default;
+      }
+
+      .cell.zone-boot {
+        border-color: #1e3a24;
+      }
+
+      .cell.zone-meta {
+        border-color: #3a3117;
+      }
+
+      .cell.zone-slot {
+        border-color: #1c2f47;
+      }
+
+      .cell.zone-rsv {
+        border-color: #262d36;
+      }
+
+      .cell.filled.zone-boot {
+        background: #2a6b3c;
+        box-shadow: inset 0 0 0 1px #56d364;
+      }
+
+      .cell.filled.zone-meta {
+        background: #4a3a12;
+        box-shadow: inset 0 0 0 1px #d29922;
+      }
+
+      .cell.filled.zone-slot {
+        background: #16324f;
+        box-shadow: inset 0 0 0 1px #2f81f7;
+      }
+
+      .cell.trial {
+        background: #4a3a12 !important;
+        box-shadow: inset 0 0 0 1px #d29922 !important;
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+
+      .cell.bad {
+        background: #4a1a1a !important;
+        box-shadow: inset 0 0 0 1px #f85149 !important;
+      }
+
+      .cell.active-slot::after {
+        content: "";
+        position: absolute;
+        inset: auto 2px 2px auto;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: #3fb950;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.45; }
+      }
+
+      .ruler {
+        display: flex;
+        justify-content: space-between;
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--faint);
+        margin-bottom: 14px;
+      }
+
+      .legend {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        font-size: 12px;
+        color: var(--dim);
+        margin-bottom: 18px;
+      }
+
+      .legend div {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        flex: 0 0 auto;
+      }
+
+      .legend .addr {
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: 10.5px;
+        color: var(--faint);
+      }
+
+      /* ---- 元数据面板 ---- */
+      .meta-card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 12px 14px;
+        margin-bottom: 12px;
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .meta-card.empty {
+        color: var(--faint);
+        font-style: italic;
+      }
+
+      .meta-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 3px 0;
+      }
+
+      .meta-row .k {
+        color: var(--faint);
+      }
+
+      .meta-row .v {
+        color: var(--text);
+      }
+
+      .flash-badge {
+        display: inline-block;
+        font-size: 10px;
+        padding: 0 6px;
+        border-radius: 3px;
+        border: 1px solid var(--border);
+        color: var(--faint);
+        font-family: var(--mono);
+      }
+
+      .flash-badge.lit {
+        color: var(--amber);
+        border-color: #4a3a12;
+        background: #2a2109;
+      }
+
+      /* ---- 控制区 ---- */
+      .controls {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      button {
+        font-family: inherit;
+        font-size: 13px;
+        text-align: left;
+        padding: 9px 13px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--blue);
+        background: var(--surface-2);
+      }
+
+      button:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+
+      button .n {
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--faint);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        width: 16px;
+        height: 16px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+      }
+
+      button.danger:hover:not(:disabled) {
+        border-color: var(--red);
+      }
+
+      button.primary {
+        border-color: var(--green);
+        background: #0f2418;
+      }
+
+      button.primary:hover:not(:disabled) {
+        background: #143020;
+      }
+
+      .select-wrap {
+        display: flex;
+        gap: 8px;
+      }
+
+      .select-wrap select {
+        flex: 1;
+        font-family: inherit;
+        font-size: 13px;
+        padding: 9px 10px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+      }
+
+      .hint {
+        margin-top: 14px;
+        padding: 10px 12px;
+        border-left: 2px solid var(--blue);
+        background: #0d1620;
+        color: var(--dim);
+        font-size: 12px;
+        border-radius: 0 6px 6px 0;
+      }
+
+      /* ---- 日志 ---- */
+      .log {
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.75;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .log div {
+        padding: 1px 0;
+        animation: fade 0.25s ease-out;
+      }
+
+      @keyframes fade {
+        from { opacity: 0; transform: translateY(-2px); }
+        to { opacity: 1; transform: none; }
+      }
+
+      .l-boot { color: #3fb950; }
+      .l-meta { color: #d29922; }
+      .l-app { color: #2f81f7; }
+      .l-err { color: #f85149; }
+      .l-dim { color: #64748b; }
+      .l-b { font-weight: 600; }
+
+      .sep {
+        color: #2a3441;
+        margin: 6px 0;
+      }
+
+      @media (max-width: 980px) {
+        main {
+          grid-template-columns: 1fr;
+          grid-template-rows: auto auto minmax(200px, 1fr);
+          overflow-y: auto;
+        }
+
+        body {
+          overflow: auto;
+        }
+
+        .col {
+          overflow: visible;
+        }
+
+        header .sub {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">OTA <span>Simulator</span></div>
+      <div class="sub">STM32 A/B 双槽 · 断电安全 · 自动回滚</div>
+      <a href="https://wenjialei15.github.io/stm32-ota-bootloader/">← 项目主页</a>
+    </header>
+
+    <main>
+      <section class="col">
+        <h2>Flash 64 KB</h2>
+        <div class="grid" id="grid"></div>
+        <div class="ruler">
+          <span>0x08000000</span>
+          <span>0x08010000</span>
+        </div>
+
+        <div class="legend">
+          <div><span class="swatch" style="background: #1c4a29; box-shadow: inset 0 0 0 1px #3fb950"></span>Bootloader<span class="addr">8 KB</span></div>
+          <div><span class="swatch" style="background: #4a3a12; box-shadow: inset 0 0 0 1px #d29922"></span>元数据<span class="addr">2×2 KB</span></div>
+          <div><span class="swatch" style="background: #16324f; box-shadow: inset 0 0 0 1px #2f81f7"></span>应用槽<span class="addr">2×24 KB</span></div>
+          <div><span class="swatch" style="background: #4a1a1a; box-shadow: inset 0 0 0 1px #f85149"></span>损坏<span class="addr"></span></div>
+        </div>
+
+        <h2>元数据双备份</h2>
+        <div class="meta-card empty" id="meta-a">Meta A：空白</div>
+        <div class="meta-card empty" id="meta-b">Meta B：空白</div>
+      </section>
+
+      <section class="col">
+        <h2>操作</h2>
+        <div class="controls">
+          <button id="btn-boot" class="primary"><span class="n">1</span>烧录 Bootloader</button>
+          <button id="btn-install"><span class="n">2</span>安装固件到 A 槽</button>
+          <div class="select-wrap">
+            <select id="ota-kind">
+              <option value="good">正常固件（会自己确认）</option>
+              <option value="bad">坏固件（启动即崩）</option>
+            </select>
+            <button id="btn-ota" style="flex: 0 0 auto"><span class="n">3</span>OTA 推送</button>
+          </div>
+          <button id="btn-power"><span class="n">4</span>重启（上电）</button>
+          <button id="btn-cut" class="danger"><span class="n">5</span>模拟断电</button>
+          <button id="btn-reset"><span class="n">6</span>全部重置</button>
+        </div>
+        <div class="hint" id="hint">点「烧录 Bootloader」开始。</div>
+      </section>
+
+      <section class="col">
+        <h2>串口输出</h2>
+        <div class="log" id="log"></div>
+      </section>
+    </main>
+
+    <script>
+      "use strict";
+
+      /* ============ 与 C 代码一致的常量 ============ */
+      const PAGE = 1024;
+      const FLASH_SIZE = 64 * PAGE;
+      const IMAGE_HEADER_SIZE = 32;
+      const IMAGE_MAGIC = 0x3141544f; // "OTA1"
+      const SLOT_SIZE = 24 * PAGE;
+
+      const ZONE = { BOOT: 0, META: 1, SLOTA: 2, SLOTB: 3, RSV: 4 };
+      const SLOT_A_BASE = 12 * PAGE; // Flash 内偏移
+      const SLOT_B_BASE = 36 * PAGE;
+      const SLOT_A_ABS = 0x08003000; // 绝对地址，写进镜像头
+      const SLOT_B_ABS = 0x08009000;
+      const META_A_ADDR = 8 * PAGE;
+      const META_B_ADDR = 10 * PAGE;
+
+      const META_NONE = 0xffffffff;
+      const MAX_RETRY = 3;
+
+      /* ============ CRC-32 (IEEE 802.3) ============ */
+      const CRC_TABLE = (() => {
+        const t = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) {
+          let c = i;
+          for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+          t[i] = c >>> 0;
+        }
+        return t;
+      })();
+
+      function crc32(bytes) {
+        let c = 0xffffffff;
+        for (let i = 0; i < bytes.length; i++) c = (c >>> 8) ^ CRC_TABLE[(c ^ bytes[i]) & 0xff];
+        return (c ^ 0xffffffff) >>> 0;
+      }
+
+      /* ============ 状态 ============ */
+      const S = {
+        flash: new Uint8Array(FLASH_SIZE).fill(0xff),
+        booted: false,
+        metaA: null,
+        metaB: null,
+        slotImage: { A: null, B: null }, // { bad: bool, version }
+        runningSlot: null,
+        crashTimer: null,
+        cutArmed: false,
+        cutFired: false,
+      };
+
+      /* ============ 工具 ============ */
+      const $ = (id) => document.getElementById(id);
+      const hex = (n, w = 4) => n.toString(16).toUpperCase().padStart(w, "0");
+      const slotName = (s) => (s === 1 ? "B" : "A");
+      const slotBase = (s) => (s === 1 ? SLOT_B_BASE : SLOT_A_BASE);
+      const slotOf = (v) => (v === 1 ? 1 : 0);
+
+      function u32(n) {
+        return new Uint8Array([n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff]);
+      }
+
+      function readU32(buf, off) {
+        return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0;
+      }
+
+      /* ============ 日志 ============ */
+      function log(text, cls = "l-dim") {
+        const div = document.createElement("div");
+        div.className = cls;
+        div.textContent = text;
+        const box = $("log");
+        box.appendChild(div);
+        // 真正的滚动容器是外层 .col，不是 .log 自己
+        const scroller = box.closest(".col") || box;
+        scroller.scrollTop = scroller.scrollHeight;
+      }
+
+      function sep() {
+        const div = document.createElement("div");
+        div.className = "sep";
+        div.textContent = "─".repeat(44);
+        $("log").appendChild(div);
+      }
+
+      function clearLog() {
+        $("log").textContent = "";
+      }
+
+      /* ============ Flash 读写（含断电注入） ============ */
+      function maybeCut(what) {
+        if (!S.cutArmed || S.cutFired) return false;
+        S.cutFired = true;
+        S.cutArmed = false;
+        log(`⚡ 断电！就在${what}进行到一半的时候`, "l-err");
+        return true;
+      }
+
+      function erasePage(addr) {
+        if (addr < 0 || addr + PAGE > FLASH_SIZE) return false;
+        if (maybeCut("擦除")) {
+          // 只擦了一半
+          S.flash.fill(0xff, addr, addr + PAGE / 2);
+          return false;
+        }
+        S.flash.fill(0xff, addr, addr + PAGE);
+        return true;
+      }
+
+      function writeFlash(addr, bytes) {
+        if (maybeCut("写入")) {
+          const half = Math.floor(bytes.length / 2);
+          S.flash.set(bytes.subarray(0, half), addr);
+          return false;
+        }
+        S.flash.set(bytes, addr);
+        return true;
+      }
+
+      /* ============ 镜像构造与校验 ============ */
+      function buildImage(loadAddr, payloadBytes, version) {
+        const payload = payloadBytes;
+        const head24 = new Uint8Array(24);
+        head24.set(u32(IMAGE_MAGIC), 0);
+        head24.set(u32(version), 4);
+        head24.set(u32(payload.length), 8);
+        head24.set(u32(loadAddr), 12);
+        head24.set(u32(loadAddr + IMAGE_HEADER_SIZE + 4), 16);
+        head24.set(u32(crc32(payload)), 20);
+
+        const img = new Uint8Array(IMAGE_HEADER_SIZE + payload.length);
+        img.set(head24, 0);
+        img.set(u32(crc32(head24)), 24);
+        img.set(u32(0), 28);
+        img.set(payload, IMAGE_HEADER_SIZE);
+        return img;
+      }
+
+      function validateImage(base, expectAddr) {
+        if (base + IMAGE_HEADER_SIZE > FLASH_SIZE) return { ok: false, why: "太短" };
+        const head = S.flash.subarray(base, base + IMAGE_HEADER_SIZE);
+        if (readU32(head, 0) !== IMAGE_MAGIC) return { ok: false, why: "magic" };
+        if (readU32(head, 24) !== crc32(head.subarray(0, 24))) return { ok: false, why: "头部 CRC" };
+        // 头校验通过之后，头里的字段才可信
+        if (readU32(head, 12) !== expectAddr) return { ok: false, why: "地址不符" };
+        const size = readU32(head, 8);
+        if (size === 0 || size > SLOT_SIZE - IMAGE_HEADER_SIZE) return { ok: false, why: "长度" };
+        const payload = S.flash.subarray(base + IMAGE_HEADER_SIZE, base + IMAGE_HEADER_SIZE + size);
+        if (crc32(payload) !== readU32(head, 20)) return { ok: false, why: "负载 CRC" };
+        return { ok: true, size };
+      }
+
+      /* ============ 元数据（双备份） ============ */
+      function sealMeta(m) {
+        const buf = new Uint8Array(32);
+        buf.set(u32(m.seq), 0);
+        buf.set(u32(m.active), 4);
+        buf.set(u32(m.pending), 8);
+        buf.set(u32(m.retry), 12);
+        buf.set(u32(0), 16);
+        buf.set(u32(0), 20);
+        buf.set(u32(0x4154454d), 24); // "META"
+        return { record: buf, crc: crc32(buf.subarray(0, 28)) };
+      }
+
+      function encodeMeta(m) {
+        const { record, crc } = sealMeta(m);
+        const out = new Uint8Array(32);
+        out.set(record.subarray(0, 28), 0);
+        out.set(u32(crc), 28);
+        return out;
+      }
+
+      function decodeMeta(addr) {
+        const buf = S.flash.subarray(addr, addr + 32);
+        if (readU32(buf, 24) !== 0x4154454d) return null;
+        if (readU32(buf, 28) !== crc32(buf.subarray(0, 28))) return null;
+        return {
+          seq: readU32(buf, 0),
+          active: readU32(buf, 4),
+          pending: readU32(buf, 8),
+          retry: readU32(buf, 12),
+          where: addr,
+        };
+      }
+
+      function newer(a, b) {
+        return a.seq !== b.seq && (a.seq - b.seq) >>> 0 < 0x80000000;
+      }
+
+      function loadMeta() {
+        const a = decodeMeta(META_A_ADDR);
+        const b = decodeMeta(META_B_ADDR);
+        if (!a && !b) return null;
+        if (a && !b) return a;
+        if (!a && b) return b;
+        return newer(a, b) ? a : b;
+      }
+
+      function commitMeta(m) {
+        const a = decodeMeta(META_A_ADDR);
+        const b = decodeMeta(META_B_ADDR);
+
+        let target;
+        let nextSeq;
+
+        if (!a && !b) {
+          target = META_A_ADDR;
+          nextSeq = 1;
+        } else if (a && !b) {
+          target = META_B_ADDR;
+          nextSeq = a.seq + 1;
+        } else if (!a && b) {
+          target = META_A_ADDR;
+          nextSeq = b.seq + 1;
+        } else if (newer(b, a)) {
+          target = META_A_ADDR;
+          nextSeq = b.seq + 1;
+        } else {
+          target = META_B_ADDR;
+          nextSeq = a.seq + 1;
+        }
+
+        const record = { ...m, seq: nextSeq >>> 0 };
+        const encoded = encodeMeta(record);
+
+        // 擦两页（元数据区 2 KB），再写
+        if (!erasePage(target)) return null;
+        if (!erasePage(target + PAGE)) return null;
+        if (!writeFlash(target, encoded)) return null;
+
+        return record;
+      }
+
+      /* ============ 启动决策（与 boot_decision.c 对应） ============ */
+      function planBoot(meta) {
+        const okA = validateImage(SLOT_A_BASE, SLOT_A_ABS).ok;
+        const okB = validateImage(SLOT_B_BASE, SLOT_B_ABS).ok;
+
+        if (!meta) {
+          if (okA) return { action: "jump", slot: 0, reason: "ok", bump: false, clear: false };
+          if (okB) return { action: "jump", slot: 1, reason: "fallback", bump: false, clear: false };
+          return { action: "recovery", slot: 0, reason: "no valid image", bump: false, clear: false };
+        }
+
+        const active = slotOf(meta.active);
+        const other = active ^ 1;
+
+        if (meta.pending !== META_NONE) {
+          const pending = slotOf(meta.pending);
+
+          if (meta.retry >= MAX_RETRY) {
+            return okA || okB
+              ? { action: "jump", slot: active, reason: "rollback", bump: false, clear: true }
+              : { action: "recovery", slot: active, reason: "no valid image", bump: false, clear: false };
+          }
+
+          const okPending = pending === 0 ? okA : okB;
+          if (!okPending) {
+            const okActive = active === 0 ? okA : okB;
+            return okActive
+              ? { action: "jump", slot: active, reason: "rollback", bump: false, clear: true }
+              : { action: "recovery", slot: active, reason: "no valid image", bump: false, clear: false };
+          }
+
+          return { action: "jump", slot: pending, reason: "trial boot", bump: true, clear: false };
+        }
+
+        const okActive = active === 0 ? okA : okB;
+        if (okActive) return { action: "jump", slot: active, reason: "ok", bump: false, clear: false };
+
+        const okOther = other === 0 ? okA : okB;
+        if (okOther) return { action: "jump", slot: other, reason: "fallback", bump: false, clear: false };
+
+        return { action: "recovery", slot: active, reason: "no valid image", bump: false, clear: false };
+      }
+
+      /* ============ 渲染 ============ */
+      function zoneOf(pageIndex) {
+        if (pageIndex < 8) return ZONE.BOOT;
+        if (pageIndex < 12) return ZONE.META;
+        if (pageIndex < 36) return ZONE.SLOTA;
+        if (pageIndex < 60) return ZONE.SLOTB;
+        return ZONE.RSV;
+      }
+
+      function render() {
+        const grid = $("grid");
+        if (!grid.children.length) {
+          for (let i = 0; i < 64; i++) {
+            const c = document.createElement("div");
+            c.className = "cell";
+            c.dataset.i = String(i);
+            grid.appendChild(c);
+          }
+        }
+
+        const meta = loadMeta();
+        const okA = validateImage(SLOT_A_BASE, SLOT_A_ABS).ok;
+        const okB = validateImage(SLOT_B_BASE, SLOT_B_ABS).ok;
+
+        for (let i = 0; i < 64; i++) {
+          const cell = grid.children[i];
+          const zone = zoneOf(i);
+          const zoneName = ["Bootloader（永不擦除）", "元数据", "应用槽 A", "应用槽 B", "预留"][zone];
+          cell.className = "cell zone-" + ["boot", "meta", "slot", "slot", "rsv"][zone];
+          cell.title = `页 ${i} · 0x0800${hex(i * PAGE, 4)} · ${zoneName}`;
+
+          if (zone === ZONE.BOOT) {
+            if (S.booted) cell.classList.add("filled");
+          } else if (zone === ZONE.META) {
+            const addr = i < 10 ? META_A_ADDR : META_B_ADDR;
+            if (decodeMeta(addr)) cell.classList.add("filled");
+          } else if (zone === ZONE.SLOTA || zone === ZONE.SLOTB) {
+            const slot = zone === ZONE.SLOTA ? 0 : 1;
+            const basePage = slot === 0 ? 12 : 36;
+            const offset = (i - basePage) * PAGE;
+            const valid = slot === 0 ? okA : okB;
+            const imgSize = valid ? validateImage(slotBase(slot), slot === 0 ? SLOT_A_ABS : SLOT_B_ABS).size + IMAGE_HEADER_SIZE : 0;
+
+            if (valid && offset < imgSize) {
+              cell.classList.add("filled");
+              // 试运行 / 损坏状态
+              if (meta && meta.pending !== META_NONE && slotOf(meta.pending) === slot && meta.retry < MAX_RETRY) {
+                cell.classList.add("trial");
+              }
+              if (S.slotImage[slot] && S.slotImage[slot].bad) {
+                cell.classList.add("bad");
+              }
+              if (meta && meta.active === slot && meta.pending === META_NONE) {
+                cell.classList.add("active-slot");
+              }
+            }
+          }
+        }
+
+        // 元数据卡片
+        const a = decodeMeta(META_A_ADDR);
+        const b = decodeMeta(META_B_ADDR);
+        $("meta-a").className = "meta-card" + (a ? "" : " empty");
+        $("meta-b").className = "meta-card" + (b ? "" : " empty");
+        $("meta-a").innerHTML = a ? metaCardHtml("A", a, !b || newer(a, b)) : "Meta A：空白";
+        $("meta-b").innerHTML = b ? metaCardHtml("B", b, !a || newer(b, a)) : "Meta B：空白";
+      }
+
+      function metaCardHtml(name, m, isLatest) {
+        const pend = m.pending === META_NONE ? "无" : "槽 " + slotName(slotOf(m.pending));
+        return `
+          <div class="meta-row"><span class="k">${name} · seq</span><span class="v">${m.seq} <span class="flash-badge ${isLatest ? "lit" : ""}">${isLatest ? "最新" : "旧"}</span></span></div>
+          <div class="meta-row"><span class="k">active</span><span class="v">${slotName(slotOf(m.active))}</span></div>
+          <div class="meta-row"><span class="k">pending</span><span class="v">${pend}</span></div>
+          <div class="meta-row"><span class="k">retry</span><span class="v">${m.retry}</span></div>`;
+      }
+
+      function setHint(text) {
+        $("hint").textContent = text;
+      }
+
+      /* ============ 操作 ============ */
+      function doBoot() {
+        S.booted = true;
+        // Bootloader 占前 8 页，模拟"已经烧录"
+        for (let i = 0; i < 8; i++) S.flash.fill(0xaa, i * PAGE, i * PAGE + 64);
+        log("烧录 Bootloader 到 0x08000000（8 KB）", "l-boot");
+        log("  这段空间永不擦除，是最后的救命稻草", "l-dim");
+        render();
+        setHint("Bootloader 就位。下一步：安装固件到 A 槽。");
+        updateButtons();
+      }
+
+      function fakeFirmware(bad) {
+        // 造一段"看起来像代码"的负载
+        const size = bad ? 1024 : 1536;
+        const bytes = new Uint8Array(size);
+        let x = bad ? 0x12345678 : 0x9e3779b9;
+        for (let i = 0; i < size; i++) {
+          x = (x * 1664525 + 1013904223) >>> 0;
+          bytes[i] = (x >>> 16) & 0xff;
+        }
+        return bytes;
+      }
+
+      function doInstall() {
+        if (!S.booted) return;
+        const payload = fakeFirmware(false);
+        const img = buildImage(SLOT_A_ABS, payload, 0x000100);
+        const base = SLOT_A_BASE;
+        for (let off = 0; off < SLOT_SIZE; off += PAGE) erasePage(base + off);
+        writeFlash(base, img);
+        S.slotImage.A = { bad: false, version: 0x000100 };
+        log(`安装固件到 A 槽：${img.length} 字节，CRC ${hex(crc32(payload), 8)}`, "l-boot");
+        render();
+        setHint("A 槽有固件了。现在可以「重启」看它启动，或者先 OTA 推一个到 B。");
+        updateButtons();
+      }
+
+      function doOta() {
+        if (!S.booted) return;
+        const kind = $("ota-kind").value;
+        const bad = kind === "bad";
+
+        // 目标槽永远是当前活动槽的对立面：新固件绝不能写到正在跑的槽上
+        const existing = loadMeta();
+        const active = existing ? slotOf(existing.active) : 0;
+        const target = active ^ 1;
+
+        log(`OTA 开始：目标槽 ${slotName(target)}`, "l-app");
+        log("  BEGIN → 擦除目标槽 24 页…", "l-dim");
+
+        const base = slotBase(target);
+        for (let off = 0; off < SLOT_SIZE; off += PAGE) {
+          if (!erasePage(base + off)) {
+            log("  擦除过程中断电，升级中断", "l-err");
+            render();
+            return;
+          }
+        }
+
+        const payload = fakeFirmware(bad);
+        const img = buildImage(target === 0 ? SLOT_A_ABS : SLOT_B_ABS, payload, 0x000200);
+        log(`  DATA → ${img.length} 字节分批写入…`, "l-dim");
+        if (!writeFlash(base, img)) {
+          log("  写入过程中断电，镜像不完整", "l-err");
+          render();
+          return;
+        }
+
+        // END：读回校验
+        const check = validateImage(base, target === 0 ? SLOT_A_ABS : SLOT_B_ABS);
+        if (!check.ok) {
+          log(`  END → 校验失败（${check.why}），拒绝提交`, "l-err");
+          render();
+          return;
+        }
+        log(`  END → 读回校验通过`, "l-boot");
+
+        let meta = loadMeta();
+        if (!meta) {
+          meta = { seq: 0, active: 0, pending: META_NONE, retry: 0 };
+        }
+        meta = commitMeta({ ...meta, pending: target, retry: 0 });
+
+        if (!meta) {
+          log("  元数据写入失败，升级放弃", "l-err");
+          render();
+          return;
+        }
+
+        S.slotImage[target === 0 ? "A" : "B"] = { bad, version: 0x000200 };
+        log(`  提交：pending = 槽 ${slotName(target)}，active 仍是槽 ${slotName(slotOf(meta.active))}`, "l-meta");
+        log(bad ? "  注意：这是「坏固件」——镜像完整但一跑就崩" : "  新固件就绪，等待下次上电试运行", bad ? "l-err" : "l-meta");
+
+        render();
+        setHint(`B 槽里有${bad ? "一个坏固件" : "新固件"}了。点「重启（上电）」看会发生什么。`);
+        updateButtons();
+      }
+
+      function doPower() {
+        if (!S.booted) return;
+        if (S.crashTimer) {
+          clearTimeout(S.crashTimer);
+          S.crashTimer = null;
+        }
+
+        sep();
+        log("[ota-boot] 上电", "l-boot");
+
+        const meta = loadMeta();
+        if (meta) {
+          log(
+            `  meta: seq=${meta.seq} active=${slotName(slotOf(meta.active))} pending=${
+              meta.pending === META_NONE ? "无" : "槽 " + slotName(slotOf(meta.pending))
+            } retry=${meta.retry}`,
+            "l-meta",
+          );
+        } else {
+          log("  meta: 空白，退回看镜像头", "l-dim");
+        }
+
+        const plan = planBoot(meta);
+        log(`  plan: 槽 ${slotName(plan.slot)} · ${plan.reason}`, plan.reason === "rollback" ? "l-err" : "l-meta");
+
+        // 落盘：试运行计数 / 回滚清理 / 首次初始化
+        let current = meta;
+        if (!current) {
+          current = { seq: 0, active: plan.slot, pending: META_NONE, retry: 0 };
+          if (plan.action === "jump") {
+            const written = commitMeta(current);
+            if (written) log(`  meta: 首次初始化，active = 槽 ${slotName(plan.slot)}`, "l-meta");
+            current = written;
+          }
+        } else if (plan.action === "jump" && (plan.bump || plan.clear)) {
+          let next = { ...current };
+          if (plan.bump) {
+            next.retry = current.retry + 1;
+            log(`  试运行计数 retry: ${current.retry} → ${next.retry}`, "l-meta");
+          }
+          if (plan.clear) {
+            next.pending = META_NONE;
+            next.active = plan.slot;
+            next.retry = 0;
+            log("  回滚完成：pending 清空、active 修正、计数归零", "l-meta");
+          }
+          const written = commitMeta(next);
+          current = written || next;
+        }
+
+        if (plan.action === "recovery") {
+          log("  两个槽都没有可用镜像 → 进升级模式，等串口", "l-err");
+          render();
+          setHint("进了升级模式。用「OTA 推送」给某个槽装固件。");
+          return;
+        }
+
+        S.runningSlot = plan.slot;
+        log(`  jump -> 0x0800${hex(slotBase(plan.slot), 4)}`, "l-boot");
+        render();
+
+        const isBad = S.slotImage[plan.slot === 0 ? "A" : "B"] && S.slotImage[plan.slot === 0 ? "A" : "B"].bad;
+
+        S.crashTimer = setTimeout(() => {
+          log(`[app] 槽 ${slotName(plan.slot)} 启动`, "l-app");
+
+          if (isBad) {
+            log("[app] DEMO_CRASH: 启动即崩（HardFault）", "l-err");
+            log("  这个镜像 CRC 完全正确，Bootloader 校验不出任何问题", "l-dim");
+            render();
+            setHint("新固件崩了，而且没来得及确认。再点「重启」，看它数到第几次放弃。");
+            updateButtons();
+            return;
+          }
+
+          // 正常应用：3 秒后确认
+          log("[app] 外设初始化完成，3 秒后报到", "l-app");
+          const m = loadMeta();
+          if (m && m.pending !== META_NONE && slotOf(m.pending) === plan.slot) {
+            const confirmed = commitMeta({ ...m, pending: META_NONE, active: plan.slot, retry: 0 });
+            if (confirmed) {
+              log(`[app] boot confirmed：槽 ${slotName(plan.slot)} 转为正式活动槽`, "l-boot");
+            }
+          } else if (!m || m.pending === META_NONE) {
+            log("[app] 没有待确认的升级，正常启动", "l-dim");
+          }
+          log("[app] heartbeat 1", "l-app");
+          render();
+          setHint("启动成功。可以继续 OTA 推新固件，来回切槽。");
+          updateButtons();
+        }, 420);
+
+        updateButtons();
+      }
+
+      function doCut() {
+        S.cutArmed = true;
+        S.cutFired = false;
+        log("⚡ 已布置断电：下一次擦除或写入会中断", "l-err");
+        setHint("现在点「OTA 推送」或「安装固件」，断电会在中途发生。之后重启，看它能否恢复。");
+      }
+
+      function doReset() {
+        if (S.crashTimer) clearTimeout(S.crashTimer);
+        S.flash.fill(0xff);
+        S.booted = false;
+        S.metaA = null;
+        S.metaB = null;
+        S.slotImage = { A: null, B: null };
+        S.runningSlot = null;
+        S.cutArmed = false;
+        S.cutFired = false;
+        clearLog();
+        log("全部重置。Flash 恢复成 0xFF。", "l-dim");
+        render();
+        setHint("点「烧录 Bootloader」开始。");
+        updateButtons();
+      }
+
+      function updateButtons() {
+        $("btn-install").disabled = !S.booted;
+        $("btn-ota").disabled = !S.booted;
+        $("btn-power").disabled = !S.booted;
+        $("btn-cut").disabled = !S.booted;
+      }
+
+      /* ============ 绑定 ============ */
+      $("btn-boot").addEventListener("click", doBoot);
+      $("btn-install").addEventListener("click", doInstall);
+      $("btn-ota").addEventListener("click", doOta);
+      $("btn-power").addEventListener("click", doPower);
+      $("btn-cut").addEventListener("click", doCut);
+      $("btn-reset").addEventListener("click", doReset);
+
+      /* ============ 初始化 ============ */
+      render();
+      updateButtons();
+      log("STM32 OTA Simulator", "l-boot");
+      log("复刻 stm32-ota-bootloader 的真实逻辑：CRC 定界、元数据双备份、试运行与回滚。", "l-dim");
+      log("按顺序点左边按钮，或者随便乱点——规则和真机一致。", "l-dim");
+
+      /* ============ 自动演示：?demo=1 ============ */
+      async function runAutoDemo() {
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        log("", "l-dim");
+        log("▶ 自动演示开始：装 A → 升级到 B → 推坏固件 → 回滚", "l-boot");
+        await wait(300);
+
+        doBoot();
+        await wait(450);
+
+        doInstall();
+        await wait(550);
+
+        doPower();
+        await wait(1400);
+
+        $("ota-kind").value = "good";
+        doOta();
+        await wait(550);
+
+        doPower();
+        await wait(1400);
+
+        log("", "l-dim");
+        log("▶ 现在推一个「坏固件」：镜像完整、CRC 正确，但一跑就崩", "l-err");
+        $("ota-kind").value = "bad";
+        doOta();
+        await wait(550);
+
+        for (let i = 0; i < 4; i++) {
+          doPower();
+          await wait(1300);
+        }
+
+        log("", "l-dim");
+        log("▶ 演示结束：设备自己退回了旧固件，全程不需要人干预", "l-boot");
+        setHint("演示结束。可以点「全部重置」自己再走一遍。");
+      }
+
+      if (new URLSearchParams(location.search).has("demo")) {
+        void runAutoDemo();
+      }
+    </script>
+  </body>
+</html>

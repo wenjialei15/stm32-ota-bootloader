@@ -186,6 +186,19 @@
         font-weight: 500;
       }
 
+      .hero-cta {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+        margin-bottom: 28px;
+      }
+
+      .cta-note {
+        font-size: 12.5px;
+        color: var(--faint);
+      }
+
       /* ---- Flash 分区图 ---- */
       .flash {
         border: 1px solid var(--border);
@@ -560,6 +573,11 @@
           一块装在现场的板子，固件有 bug 了。派人去插 ST-Link 不现实，所以让它自己把新固件
           收下来、验证、切换；跑不起来还得能自己退回去。难点不在传固件，在<strong>掉电</strong>。
         </p>
+
+        <div class="hero-cta">
+          <a class="btn primary" href="./simulator/">打开在线模拟器 →</a>
+          <span class="cta-note">不用买硬件，浏览器里跑完整 OTA 流程，含断电与回滚</span>
+        </div>
 
         <div class="badges">
           <span class="badge ok">build passing</span>
