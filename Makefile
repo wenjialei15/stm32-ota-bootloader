@@ -24,7 +24,8 @@ BOOT_SRC := shared/startup_stm32f103.c \
             bootloader/src/metadata.c \
             bootloader/src/image.c \
             bootloader/src/flash_if.c \
-            bootloader/src/uart.c
+            bootloader/src/uart.c \
+            bootloader/src/ota_proto.c
 
 APP_SRC  := shared/startup_stm32f103.c \
             shared/system.c \

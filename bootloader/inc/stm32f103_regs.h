@@ -69,6 +69,7 @@
 
 /* ---- Cortex-M3 系统控制块 ---- */
 #define SCB_VTOR      REG32(0xE000ED08u)
+#define SCB_AIRCR     REG32(0xE000ED0Cu)
 #define SYST_CSR      REG32(0xE000E010u)
 #define SYST_RVR      REG32(0xE000E014u)
 #define SYST_CVR      REG32(0xE000E018u)

@@ -11,10 +11,12 @@ SRCS = tests_main.c \
        test_image.c \
        test_metadata.c \
        test_boot_decision.c \
+       test_ota_proto.c \
        ../shared/crc32.c \
        ../bootloader/src/image.c \
        ../bootloader/src/metadata.c \
-       ../bootloader/src/boot_decision.c
+       ../bootloader/src/boot_decision.c \
+       ../bootloader/src/ota_proto.c
 
 OUT = build/host_tests
 

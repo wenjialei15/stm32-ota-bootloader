@@ -2,6 +2,7 @@
 #include "flash_if.h"
 #include "image.h"
 #include "metadata.h"
+#include "ota_proto.h"
 #include "stm32f103_regs.h"
 #include "system.h"
 #include "uart.h"
@@ -98,6 +99,72 @@ static void log_meta(const boot_meta_t *meta)
     uart_puts("\r\n");
 }
 
+/* ---- 升级模式 ---- */
+
+/*
+ * 这些缓冲区放 static 而不是栈上：parser + session + frame 加起来约 3 KB，
+ * 放栈上会让 20 KB 的 RAM 一下子紧张起来，而且 Bootloader 的栈没有保护。
+ */
+static ota_parser_t g_parser;
+static ota_session_t g_session;
+static ota_frame_t g_frame;
+static uint8_t g_resp[OTA_MAX_PAYLOAD + 8];
+
+static void system_reset(void) __attribute__((noreturn));
+
+static void system_reset(void)
+{
+    /* AIRCR：VECTKEY 0x05FA 必须写在低 16 位之外，否则写入被忽略 */
+    SCB_AIRCR = (0x05FAu << 16) | (1u << 2); /* SYSRESETREQ */
+    for (;;) {
+    }
+}
+
+static void ota_loop(int first_byte) __attribute__((noreturn));
+
+static void ota_loop(int first_byte)
+{
+    memset(&g_parser, 0, sizeof(g_parser));
+    ota_parser_reset(&g_parser);
+    ota_session_init(&g_session);
+
+    uart_puts("  ota: ready at 115200 8N1\r\n");
+
+    int pending = first_byte;
+
+    for (;;) {
+        int c = pending;
+        pending = -1;
+        if (c < 0) {
+            c = uart_getc_timeout(400u);
+        }
+        if (c < 0) {
+            led_toggle(); /* 空闲闪灯，表示还活着而不是卡死 */
+            continue;
+        }
+
+        if (ota_parser_feed(&g_parser, (uint8_t)c, &g_frame) != 1) {
+            continue;
+        }
+
+        uint32_t n = ota_session_handle(&g_session, &g_frame, &g_storage, g_resp,
+                                        sizeof(g_resp));
+        for (uint32_t i = 0; i < n; i++) {
+            uart_putc((char)g_resp[i]);
+        }
+
+        /*
+         * END 成功就重启。不要在这里手动跳转——重启后会重新走一遍
+         * 元数据决策，那条路径已经测过了，没必要再造一条。
+         */
+        if (g_frame.cmd == OTA_CMD_END && n >= 6u && g_resp[5] == (uint8_t)OTA_OK) {
+            uart_puts("\r\n  ota: accepted, rebooting\r\n");
+            delay_cycles(40000000u);
+            system_reset();
+        }
+    }
+}
+
 int main(void)
 {
     clock_init();
@@ -140,32 +207,35 @@ int main(void)
         }
     }
 
-    if (plan.action == BOOT_ACTION_JUMP) {
-        uart_puts("  jump -> ");
-        uart_puthex(slot_base_of(plan.slot), 8);
-        uart_puts("\r\n");
-
-        /* 跳之前闪一下灯，肉眼确认走到了这一步 */
-        led_on();
-        delay_cycles(4000000u);
-        led_off();
-
-        boot_jump(slot_base_of(plan.slot));
-    }
-
     /*
-     * 升级模式。M4 会把这里替换成协议状态机，当前版本只把状态打出来，
-     * 方便在没有 PC 端工具时确认设备活着。
+     * 有可用固件，但不代表永远不升级了。
+     * 开机给主机一个 300 ms 的窗口：这期间收到任何字节就留在 Bootloader。
+     *
+     * 没有这个窗口，设备一装上正常固件就再也进不去升级模式了——
+     * 这是很多人第一次做 OTA 时会漏掉的一步。
      */
-    uart_puts("  recovery mode: no valid image, waiting on UART1\r\n");
-    flash_unlock();
+    if (plan.action == BOOT_ACTION_JUMP) {
+        int c = uart_getc_timeout(300u);
+        if (c < 0) {
+            uart_puts("  jump -> ");
+            uart_puthex(slot_base_of(plan.slot), 8);
+            uart_puts("\r\n");
 
-    for (;;) {
-        led_toggle();
-        delay_cycles(2000000u);
-        int c = uart_getc();
-        if (c >= 0) {
-            uart_putc((char)c);
+            /* 跳之前闪一下灯，肉眼确认走到了这一步 */
+            led_on();
+            delay_cycles(4000000u);
+            led_off();
+
+            boot_jump(slot_base_of(plan.slot));
         }
+
+        uart_puts("  host detected, staying in bootloader\r\n");
+        flash_unlock();
+        ota_loop(c);
     }
+
+    /* 两个槽都没有可用镜像：直接进升级模式等主机救场 */
+    uart_puts("  no valid image, entering upgrade mode\r\n");
+    flash_unlock();
+    ota_loop(-1);
 }
