@@ -169,6 +169,25 @@ int main(void)
     uart_puts("\r\n");
 
     /*
+     * 首次上电（元数据区还是空白的 0xFF）：把找到的那个槽记为 active，
+     * 让元数据真正落地。
+     *
+     * 不这么做的话，设备每次启动都走 "no meta" 分支——功能上没毛病，
+     * 但应用那边的 confirm 会一直失败，STATUS 也永远是空的，
+     * 排查问题时会以为坏了。
+     */
+    if (!meta_ok && plan.action == BOOT_ACTION_JUMP) {
+        meta_defaults(&meta);
+        meta.active_slot = plan.slot;
+        meta.version = 0u;
+        if (meta_commit(&g_flash_storage, &meta) == 0) {
+            uart_puts("  meta: initialised from slot ");
+            uart_putc(plan.slot == SLOT_B ? 'B' : 'A');
+            uart_puts("\r\n");
+        }
+    }
+
+    /*
      * 试运行计数必须在跳转之前落盘。
      * 如果放到 app 里做，app 在第一行就崩了的话这个数永远加不上去，
      * 设备会无限重启在新固件上。

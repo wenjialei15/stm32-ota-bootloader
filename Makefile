@@ -94,6 +94,11 @@ size: all
 flash: $(BUILD)/bootloader.bin
 	st-flash write $(BUILD)/bootloader.bin 0x08000000
 
+# 首次烧录应用必须写 .img 而不是 .bin：
+# .bin 没有 32 字节镜像头，Bootloader 校验会直接判为非法镜像。
+flash-app: images
+	st-flash write $(BUILD)/app_a.img $(SLOT_A_ADDR)
+
 host-test:
 	$(MAKE) -C host_tests
 
@@ -106,3 +111,4 @@ help:
 	@echo "make size       查看各镜像占用"
 	@echo "make host-test  跑主机侧单元测试（不需要 ARM 工具链）"
 	@echo "make flash      用 st-flash 烧录 bootloader"
+	@echo "make flash-app  烧录 A 槽应用到 0x08003000（写 .img 不是 .bin）"
