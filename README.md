@@ -113,20 +113,50 @@ python tools/ota_send.py --port COM3 --image build/app_b.img
 | M2 Bootloader 跳转 | ✅ 完成 |
 | M3 Flash 与元数据双备份 | ✅ 完成 |
 | M4 UART 升级协议 | ✅ 完成 |
-| M5 A/B 切换与回滚 | ⬜ 待做（决策逻辑已完成，缺 app 侧确认） |
-| M6 打磨与发布 | ⬜ 待做 |
+| M5 A/B 切换与回滚 | ✅ 完成 |
+| M6 打磨与发布 | ⬜ 待做（需真板实测数据） |
 
 ### 实测数据
 
 | 项 | 实测值 | 预算 |
 | --- | --- | --- |
-| Bootloader Flash | 6112 字节 | 8192（75%） |
+| Bootloader Flash | 6128 字节 | 8192（75%） |
 | Bootloader RAM | 5196 字节 | 20480（25%） |
-| 应用固件 | 1520 字节 | 24544（6%） |
-| 主机测试 | 159 项断言，0 失败 | — |
+| 应用固件 Flash | 2788 字节 | 24544（11%） |
+| 应用固件 RAM | 1028 字节 | 20480（5%） |
+| 主机测试 | 210 项断言，0 失败 | — |
 | 掉电注入点 | 6 个时机全部恢复 | — |
 
 协议层吃掉了 4 KB 静态缓冲（帧缓冲、会话页缓冲、响应缓冲各 1 KB）。20 KB RAM 的板子上这是笔不小的开销，可以复用缓冲省下来，但会牺牲可读性——当前选择是"留 15 KB 余量，换清晰的分层"。
+
+## 演示一次回滚
+
+这是整个项目唯一值得录成视频的部分：**推一个能通过校验、但一跑就崩的固件，看它自己退回来。**
+
+```bash
+# 1. 烧 bootloader 和 A 槽的正常固件
+make flash
+st-flash write build/app_a.img 0x08003000
+
+# 2. 把一个"会崩"的固件推到 B 槽
+make images
+python tools/ota_send.py --port COM3 --image build/app_crash.img
+```
+
+串口应该看到：
+
+```
+[ota-boot]  trial boot, retry=1        <- 新固件第一次试运行
+[app]       DEMO_CRASH: dying on purpose
+[ota-boot]  trial boot, retry=2        <- 崩了，再试
+[app]       DEMO_CRASH: dying on purpose
+[ota-boot]  trial boot, retry=3        <- 第三次
+[app]       DEMO_CRASH: dying on purpose
+[ota-boot]  rollback, slot A           <- 判定失败，退回旧固件
+[app]       slot A, boot confirmed
+```
+
+`app_crash` 固件镜像完整、CRC 正确——Bootloader 校验不出任何问题。它只能靠"新固件有没有自己报到"来判断，这就是为什么回滚必须由应用参与。
 
 详细拆解见 [docs/milestones.md](docs/milestones.md)，设计取舍见 [docs/design.md](docs/design.md)。
 

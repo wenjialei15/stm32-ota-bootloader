@@ -570,7 +570,7 @@
 
         <div class="metrics">
           <div class="metric">
-            <span class="value">6112<span class="unit">B</span></span>
+            <span class="value">6128<span class="unit">B</span></span>
             <span class="label">Bootloader 占用</span>
           </div>
           <div class="metric">
@@ -578,7 +578,7 @@
             <span class="label">RAM 使用</span>
           </div>
           <div class="metric">
-            <span class="value">159</span>
+            <span class="value">210</span>
             <span class="label">主机测试断言</span>
           </div>
           <div class="metric">
@@ -660,7 +660,7 @@
               <div class="meta">pending_slot != NONE</div>
               <div class="branch">
                 <div><code>retry &lt; 3</code> → 重试计数加一并写盘，跳新槽</div>
-                <div><code>retry ≥ 3</code> → 判定失败，回滚到旧槽</div>
+                <div><code>retry ≥ 3</code> → 判定失败，回滚到旧槽并清掉 pending</div>
                 <div>新槽镜像 CRC 不过 → 立即回滚，不浪费三次启动</div>
               </div>
             </div>
@@ -684,6 +684,18 @@
                 <div>关 SysTick —— 唯一会自己触发的异常源</div>
                 <div><code>SCB-&gt;VTOR</code> 重定位向量表到新槽</div>
                 <div><code>msr msp</code> 换成应用自己的栈顶</div>
+              </div>
+            </div>
+          </div>
+          <div class="step">
+            <span class="idx">06</span>
+            <div class="body">
+              <div class="title">应用启动 3 秒后报到</div>
+              <div class="meta">写 pending = NONE，active = 本槽</div>
+              <div class="branch">
+                <div>报到了 → 这个槽正式生效，之后都走正常路径</div>
+                <div>没报到（崩溃 / 掉电）→ 下次上电继续累加 retry</div>
+                <div>确认太早等于没确认：后面初始化再崩也不会回滚</div>
               </div>
             </div>
           </div>
@@ -727,7 +739,7 @@
             </p>
             <p>
               结果是：掉电这种最难的逻辑，可以在 PC 上把断电点一个一个试过去，
-              159 项断言全部在 CI 里跑，不需要板子。
+              210 项断言全部在 CI 里跑，不需要板子。
             </p>
           </div>
         </div>
@@ -825,11 +837,11 @@
           <div class="row done">
             <span class="m">M4</span><span class="t">UART 升级协议</span><span class="s">done</span>
           </div>
-          <div class="row now">
-            <span class="m">M5</span><span class="t">A/B 切换与自动回滚</span><span class="s">next</span>
+          <div class="row done">
+            <span class="m">M5</span><span class="t">A/B 切换与自动回滚</span><span class="s">done</span>
           </div>
-          <div class="row">
-            <span class="m">M6</span><span class="t">打磨与发布</span><span class="s">todo</span>
+          <div class="row now">
+            <span class="m">M6</span><span class="t">打磨与发布</span><span class="s">next</span>
           </div>
         </div>
       </div>
