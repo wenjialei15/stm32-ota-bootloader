@@ -4,6 +4,9 @@
 
 **带 A/B 双槽与自动回滚的嵌入式 OTA 升级方案** —— 面向 STM32F103C8T6，纯寄存器操作，不依赖 HAL。
 
+[![build](https://github.com/wenjialei15/stm32-ota-bootloader/actions/workflows/build.yml/badge.svg)](https://github.com/wenjialei15/stm32-ota-bootloader/actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
 </div>
 
 ---
@@ -105,6 +108,16 @@ make flash
 | M4 UART 升级协议 | ⬜ 待做 |
 | M5 A/B 切换与回滚 | ⬜ 待做（决策逻辑已完成，缺 app 侧确认） |
 | M6 打磨与发布 | ⬜ 待做 |
+
+### 实测数据
+
+| 项 | 实测值 | 预算 |
+| --- | --- | --- |
+| Bootloader Flash | 3868 字节 | 8192（47%） |
+| Bootloader RAM | 1028 字节 | 20480（5%） |
+| 应用固件 | 1520 字节 | 24544（6%） |
+| 主机测试 | 109 项断言，0 失败 | — |
+| 掉电注入点 | 6 个时机全部恢复 | — |
 
 详细拆解见 [docs/milestones.md](docs/milestones.md)，设计取舍见 [docs/design.md](docs/design.md)。
 
