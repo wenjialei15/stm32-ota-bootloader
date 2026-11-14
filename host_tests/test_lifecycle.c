@@ -123,7 +123,7 @@ static void setup_factory(fake_flash_t *ff, storage_if_t *storage)
     (void)meta_commit(storage, &meta);
 }
 
-static void test_happy_path(fake_flash_t *ff, const storage_if_t *storage)
+static void test_happy_path(fake_flash_t *ff, storage_if_t *storage)
 {
     printf("  -- upgrade then confirm\n");
 
@@ -170,7 +170,7 @@ static void test_happy_path(fake_flash_t *ff, const storage_if_t *storage)
     CHECK_EQ(meta.retry_count, 0u);
 }
 
-static void test_rollback(fake_flash_t *ff, const storage_if_t *storage)
+static void test_rollback(fake_flash_t *ff, storage_if_t *storage)
 {
     printf("  -- bad image triggers rollback\n");
 
@@ -219,7 +219,7 @@ static void test_rollback(fake_flash_t *ff, const storage_if_t *storage)
              IMAGE_OK);
 }
 
-static void test_confirm_rules(fake_flash_t *ff, const storage_if_t *storage)
+static void test_confirm_rules(fake_flash_t *ff, storage_if_t *storage)
 {
     printf("  -- confirm rules\n");
 
