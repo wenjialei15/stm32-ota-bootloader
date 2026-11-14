@@ -90,11 +90,12 @@ static void test_parser(void)
     CHECK_EQ(parser.dropped_frames, 0u);
 
     /* CRC 被改坏：整帧丢弃 */
-    uint16_t c = (uint16_t)ota_build_frame(buf, sizeof(buf), OTA_CMD_END, 3u, body, 4u);
-    buf[c - 1] ^= 0xFFu; /* 动 CRC 最高字节 */
+    uint8_t crc_buf[64];
+    uint16_t c = (uint16_t)ota_build_frame(crc_buf, sizeof(crc_buf), OTA_CMD_END, 3u, body, 4u);
+    crc_buf[c - 1] ^= 0xFFu; /* 动 CRC 最高字节 */
     int last = 0;
     for (uint16_t i = 0; i < c; i++) {
-        last = ota_parser_feed(&parser, buf[i], &frame);
+        last = ota_parser_feed(&parser, crc_buf[i], &frame);
     }
     CHECK_EQ(last, -1);
     CHECK_EQ(parser.dropped_frames, 1u);
@@ -109,13 +110,17 @@ static void test_parser(void)
     CHECK_EQ(parser.dropped_frames, 2u);
 
     /* 重同步：被丢弃之后，下一帧仍然能被正确接收 */
+    uint8_t resync_buf[64];
+    uint16_t rn = (uint16_t)ota_build_frame(resync_buf, sizeof(resync_buf), OTA_CMD_HELLO,
+                                            9u, NULL, 0u);
     frames = 0;
-    for (uint16_t i = 0; i < a; i++) {
-        if (ota_parser_feed(&parser, buf[i], &frame) == 1) {
+    for (uint16_t i = 0; i < rn; i++) {
+        if (ota_parser_feed(&parser, resync_buf[i], &frame) == 1) {
             frames++;
         }
     }
     CHECK_EQ(frames, 1);
+    CHECK_EQ(frame.cmd, OTA_CMD_HELLO);
 }
 
 static void test_full_upgrade(void)
