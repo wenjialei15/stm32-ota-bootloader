@@ -22,7 +22,8 @@ jobs:
       - name: 安装 arm-none-eabi-gcc
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi
       - name: 编译 bootloader 与两份 app
         run: make
       - name: 查看占用

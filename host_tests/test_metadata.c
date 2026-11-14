@@ -86,13 +86,17 @@ void run_metadata_tests(void)
         CHECK_EQ(out.active_slot, m.active_slot);
     }
 
-    /* 抹掉一份备份，仍能从另一份读出来 */
-    memset(ff.mem + (META_B_ADDR - FAKE_BASE), 0xFF, META_REGION);
+    /*
+     * 此时 A=seq5、B=seq6（提交在两侧交替）。
+     * 抹掉较旧的 A，最新的 B 必须还能读出来——这正是双备份的意义：
+     * 擦除任意一份，另一份都必须是完整的最新或次新状态。
+     */
+    memset(ff.mem + (META_A_ADDR - FAKE_BASE), 0xFF, META_REGION);
     CHECK_EQ(meta_load(&st, &out), 0);
     CHECK_EQ(out.seq, 6u);
 
     /* 两份都抹掉才报错 */
-    memset(ff.mem + (META_A_ADDR - FAKE_BASE), 0xFF, META_REGION);
+    memset(ff.mem + (META_B_ADDR - FAKE_BASE), 0xFF, META_REGION);
     CHECK_EQ(meta_load(&st, &out), -1);
 
     fake_flash_free(&ff);
