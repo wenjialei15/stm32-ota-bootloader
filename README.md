@@ -7,6 +7,8 @@
 [![build](https://github.com/wenjialei15/stm32-ota-bootloader/actions/workflows/build.yml/badge.svg)](https://github.com/wenjialei15/stm32-ota-bootloader/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
+**[项目主页](https://wenjialei15.github.io/stm32-ota-bootloader/)** — 分区图、启动流程、实测数据
+
 </div>
 
 ---

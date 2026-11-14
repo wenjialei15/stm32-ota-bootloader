@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>STM32 OTA Bootloader — A/B 双槽与自动回滚</title>
+    <meta
+      name="description"
+      content="面向 STM32F103C8T6 的 OTA 引导程序：A/B 双槽、掉电安全元数据、启动确认与自动回滚。纯寄存器操作，不依赖 HAL。"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%230a0e14'/><rect x='18' y='30' width='64' height='14' rx='3' fill='%233fb950'/><rect x='18' y='52' width='28' height='14' rx='3' fill='%232f81f7'/><rect x='54' y='52' width='28' height='14' rx='3' fill='%232f81f7'/></svg>"
+    />
+    <style>
+      :root {
+        --bg: #0a0e14;
+        --surface: #111720;
+        --surface-2: #161d28;
+        --border: #1f2937;
+        --border-soft: #18202b;
+        --text: #e2e8f0;
+        --dim: #94a3b8;
+        --faint: #64748b;
+        --green: #3fb950;
+        --green-soft: rgba(63, 185, 80, 0.12);
+        --blue: #2f81f7;
+        --blue-soft: rgba(47, 129, 247, 0.14);
+        --amber: #d29922;
+        --amber-soft: rgba(210, 153, 34, 0.14);
+        --red: #f85149;
+        --mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, ui-monospace, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 15px;
+        line-height: 1.7;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .wrap {
+        max-width: 940px;
+        margin: 0 auto;
+        padding: 0 24px;
+      }
+
+      /* 顶部细线，像示波器的扫描基线 */
+      .scanline {
+        height: 2px;
+        background: linear-gradient(90deg, transparent, var(--green), transparent);
+        opacity: 0.55;
+      }
+
+      header.hero {
+        padding: 72px 0 56px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      .kicker {
+        font-family: var(--mono);
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--green);
+        margin: 0 0 18px;
+      }
+
+      h1 {
+        font-family: var(--mono);
+        font-size: clamp(30px, 5vw, 46px);
+        line-height: 1.15;
+        font-weight: 600;
+        letter-spacing: -0.5px;
+        margin: 0 0 18px;
+      }
+
+      .lede {
+        font-size: 17px;
+        color: var(--dim);
+        max-width: 620px;
+        margin: 0 0 28px;
+      }
+
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 40px;
+      }
+
+      .badge {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        padding: 4px 11px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        color: var(--dim);
+        background: var(--surface);
+      }
+
+      .badge.ok {
+        color: var(--green);
+        border-color: rgba(63, 185, 80, 0.35);
+        background: var(--green-soft);
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1px;
+        background: var(--border-soft);
+        border: 1px solid var(--border-soft);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .metric {
+        background: var(--surface);
+        padding: 18px 16px 16px;
+      }
+
+      .metric .value {
+        font-family: var(--mono);
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: -0.5px;
+        display: block;
+        line-height: 1.2;
+      }
+
+      .metric .unit {
+        font-size: 13px;
+        color: var(--faint);
+        font-weight: 400;
+        margin-left: 2px;
+      }
+
+      .metric .label {
+        display: block;
+        font-size: 12px;
+        color: var(--faint);
+        margin-top: 6px;
+      }
+
+      section {
+        padding: 56px 0;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      h2 {
+        font-size: 13px;
+        font-family: var(--mono);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--faint);
+        font-weight: 500;
+        margin: 0 0 24px;
+      }
+
+      h3 {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0 0 8px;
+      }
+
+      p {
+        margin: 0 0 14px;
+        color: var(--dim);
+      }
+
+      p strong {
+        color: var(--text);
+        font-weight: 500;
+      }
+
+      /* ---- Flash 分区图 ---- */
+      .flash {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+
+      .flash-bar {
+        display: flex;
+        height: 54px;
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+
+      .seg {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-right: 1px solid rgba(10, 14, 20, 0.65);
+        color: #0a0e14;
+        font-weight: 600;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+
+      .seg:last-child {
+        border-right: 0;
+      }
+
+      .seg.boot {
+        background: var(--green);
+      }
+
+      .seg.meta {
+        background: var(--amber);
+        font-size: 10px;
+      }
+
+      .seg.slot {
+        background: var(--blue);
+        color: #05101f;
+      }
+
+      .seg.reserved {
+        background: var(--text-faint, #475569);
+        color: #cbd5e1;
+      }
+
+      .flash-legend {
+        display: grid;
+        grid-template-columns: auto 1fr auto auto;
+        gap: 4px 14px;
+        padding: 16px 18px 18px;
+        font-size: 13px;
+        align-items: baseline;
+      }
+
+      .flash-legend .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 2px;
+        display: inline-block;
+        align-self: center;
+      }
+
+      .flash-legend .name {
+        color: var(--text);
+      }
+
+      .flash-legend .range {
+        font-family: var(--mono);
+        color: var(--faint);
+        font-size: 12px;
+      }
+
+      .flash-legend .desc {
+        color: var(--faint);
+        font-size: 12px;
+      }
+
+      .note {
+        font-size: 13px;
+        color: var(--faint);
+        margin-top: 16px;
+        padding-left: 12px;
+        border-left: 2px solid var(--border);
+      }
+
+      /* ---- 决策流程 ---- */
+      .flow {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 34px 1fr;
+        gap: 14px;
+        align-items: start;
+      }
+
+      .step .idx {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--faint);
+        text-align: right;
+        padding-top: 3px;
+      }
+
+      .step .body {
+        padding-bottom: 22px;
+        border-left: 1px solid var(--border);
+        padding-left: 18px;
+        margin-left: -18px;
+        position: relative;
+      }
+
+      .step:last-child .body {
+        border-left-color: transparent;
+        padding-bottom: 0;
+      }
+
+      .step .body::before {
+        content: "";
+        position: absolute;
+        left: -4.5px;
+        top: 9px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--surface);
+        border: 1px solid var(--border);
+      }
+
+      .step.hot .body::before {
+        background: var(--green);
+        border-color: var(--green);
+        box-shadow: 0 0 0 4px var(--green-soft);
+      }
+
+      .step .title {
+        font-weight: 500;
+        color: var(--text);
+      }
+
+      .step .meta {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--faint);
+        margin-top: 3px;
+      }
+
+      .branch {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .branch div {
+        font-size: 13px;
+        color: var(--dim);
+      }
+
+      .branch code {
+        font-family: var(--mono);
+        font-size: 12px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        background: var(--surface-2);
+        color: var(--text);
+      }
+
+      /* ---- 设计卡片 ---- */
+      .cards {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 20px 22px;
+        background: var(--surface);
+      }
+
+      .card p:last-child {
+        margin-bottom: 0;
+      }
+
+      .card .tag {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--blue);
+        margin-bottom: 8px;
+        display: block;
+      }
+
+      /* ---- 进度 ---- */
+      .progress-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        background: var(--border-soft);
+        border: 1px solid var(--border-soft);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 62px 1fr 92px;
+        gap: 14px;
+        align-items: center;
+        padding: 12px 18px;
+        background: var(--surface);
+        font-size: 14px;
+      }
+
+      .row .m {
+        font-family: var(--mono);
+        color: var(--faint);
+        font-size: 12px;
+      }
+
+      .row .t {
+        color: var(--text);
+      }
+
+      .row .s {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        text-align: right;
+        color: var(--faint);
+      }
+
+      .row.done .s {
+        color: var(--green);
+      }
+
+      .row.now .s {
+        color: var(--amber);
+      }
+
+      .row.now {
+        background: var(--surface-2);
+      }
+
+      /* ---- 页脚 ---- */
+      footer {
+        padding: 48px 0 64px;
+      }
+
+      .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 26px;
+      }
+
+      .btn {
+        font-family: var(--mono);
+        font-size: 13px;
+        padding: 9px 18px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        color: var(--text);
+        text-decoration: none;
+        background: var(--surface);
+        transition: border-color 0.15s, color 0.15s;
+      }
+
+      .btn:hover {
+        border-color: var(--green);
+        color: var(--green);
+      }
+
+      .btn.primary {
+        background: var(--green);
+        border-color: var(--green);
+        color: #06120a;
+        font-weight: 600;
+      }
+
+      .btn.primary:hover {
+        filter: brightness(1.08);
+        color: #06120a;
+      }
+
+      .colophon {
+        font-size: 12.5px;
+        color: var(--faint);
+        font-family: var(--mono);
+      }
+
+      @media (max-width: 720px) {
+        .metrics {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        header.hero {
+          padding: 48px 0 40px;
+        }
+
+        section {
+          padding: 40px 0;
+        }
+
+        .flash-legend {
+          grid-template-columns: auto 1fr;
+          row-gap: 10px;
+        }
+
+        .flash-legend .range,
+        .flash-legend .desc {
+          display: none;
+        }
+
+        .row {
+          grid-template-columns: 54px 1fr;
+        }
+
+        .row .s {
+          grid-column: 2;
+          text-align: left;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="scanline"></div>
+
+    <header class="hero">
+      <div class="wrap">
+        <p class="kicker">STM32F103 · Cortex-M3 · Bare Metal</p>
+        <h1>OTA Bootloader<br />with A/B slots</h1>
+        <p class="lede">
+          一块装在现场的板子，固件有 bug 了。派人去插 ST-Link 不现实，所以让它自己把新固件
+          收下来、验证、切换；跑不起来还得能自己退回去。难点不在传固件，在<strong>掉电</strong>。
+        </p>
+
+        <div class="badges">
+          <span class="badge ok">build passing</span>
+          <span class="badge">MIT</span>
+          <span class="badge">64 KB Flash</span>
+          <span class="badge">no HAL</span>
+        </div>
+
+        <div class="metrics">
+          <div class="metric">
+            <span class="value">3868<span class="unit">B</span></span>
+            <span class="label">Bootloader 占用</span>
+          </div>
+          <div class="metric">
+            <span class="value">1028<span class="unit">B</span></span>
+            <span class="label">RAM 使用</span>
+          </div>
+          <div class="metric">
+            <span class="value">109</span>
+            <span class="label">主机测试断言</span>
+          </div>
+          <div class="metric">
+            <span class="value">6<span class="unit">/6</span></span>
+            <span class="label">掉电注入点恢复</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section>
+      <div class="wrap">
+        <h2>Flash 布局</h2>
+        <div class="flash">
+          <div class="flash-bar">
+            <div class="seg boot" style="width: 12.5%" title="Bootloader 8 KB">BOOT</div>
+            <div class="seg meta" style="width: 3.1%" title="Meta A 2 KB">A</div>
+            <div class="seg meta" style="width: 3.1%" title="Meta B 2 KB">B</div>
+            <div class="seg slot" style="width: 37.5%" title="Slot A 24 KB">SLOT A</div>
+            <div class="seg slot" style="width: 37.5%" title="Slot B 24 KB">SLOT B</div>
+            <div class="seg reserved" style="width: 6.3%" title="Reserved 4 KB">RSV</div>
+          </div>
+          <div class="flash-legend">
+            <span class="dot" style="background: #3fb950"></span>
+            <span class="name">Bootloader</span>
+            <span class="range">0x08000000</span>
+            <span class="desc">8 KB · 永不擦除</span>
+
+            <span class="dot" style="background: #d29922"></span>
+            <span class="name">元数据双备份</span>
+            <span class="range">0x08002000 / 0x08002800</span>
+            <span class="desc">2 × 2 KB</span>
+
+            <span class="dot" style="background: #2f81f7"></span>
+            <span class="name">应用双槽</span>
+            <span class="range">0x08003000 / 0x08009000</span>
+            <span class="desc">2 × 24 KB</span>
+
+            <span class="dot" style="background: #475569"></span>
+            <span class="name">预留</span>
+            <span class="range">0x0800F000</span>
+            <span class="desc">4 KB</span>
+          </div>
+        </div>
+        <p class="note">
+          64 KB 做 A/B 很紧：Bootloader 8 KB 是下限（含 UART 协议和 Flash 驱动），剩下的空间对半分只剩
+          24 KB 一槽。这个约束本身就是设计的一部分。
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <h2>启动决策</h2>
+        <div class="flow">
+          <div class="step">
+            <span class="idx">01</span>
+            <div class="body">
+              <div class="title">上电复位，进入 Bootloader</div>
+              <div class="meta">0x08000000 · 永不擦除</div>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="idx">02</span>
+            <div class="body">
+              <div class="title">读取元数据</div>
+              <div class="meta">两份备份，取 seq 更大且 CRC 正确的一份</div>
+              <div class="branch">
+                <div>两份都坏 → 退回「只看镜像头」，A 槽优先</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="step hot">
+            <span class="idx">03</span>
+            <div class="body">
+              <div class="title">有没有待确认的升级？</div>
+              <div class="meta">pending_slot != NONE</div>
+              <div class="branch">
+                <div><code>retry &lt; 3</code> → 重试计数加一并写盘，跳新槽</div>
+                <div><code>retry ≥ 3</code> → 判定失败，回滚到旧槽</div>
+                <div>新槽镜像 CRC 不过 → 立即回滚，不浪费三次启动</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="idx">04</span>
+            <div class="body">
+              <div class="title">正常启动</div>
+              <div class="meta">跳 active 槽；它坏了就试另一个</div>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="idx">05</span>
+            <div class="body">
+              <div class="title">跳转前的四件事</div>
+              <div class="meta">缺一件都会在应用里炸</div>
+              <div class="branch">
+                <div><code>cpsid i</code> 关全局中断</div>
+                <div>关 SysTick —— 唯一会自己触发的异常源</div>
+                <div><code>SCB-&gt;VTOR</code> 重定位向量表到新槽</div>
+                <div><code>msr msp</code> 换成应用自己的栈顶</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <h2>三个关键决定</h2>
+        <div class="cards">
+          <div class="card">
+            <span class="tag">掉电安全</span>
+            <h3>双备份不需要「提交标志」</h3>
+            <p>
+              常见做法是先写一个「正在更新」标记再改数据，但标记本身也要掉电保护，逻辑就套娃了。
+              这里改成<strong>永远擦最旧那份、写新的</strong>，于是磁盘上天然总有一份完整记录。
+            </p>
+            <p>
+              擦除中掉电、写入中掉电、写完没校验就掉电，三种情况都能自愈——因为另一份从头到尾没被碰过。
+            </p>
+          </div>
+
+          <div class="card">
+            <span class="tag">帧同步</span>
+            <h3>用 CRC 当帧边界，而不是帧头</h3>
+            <p>
+              Modbus 式的私有协议往往既没有帧头也没有长度字段。可行的办法是枚举所有可能的帧长，
+              逐个试探 CRC——<strong>CRC 本身就是最强的帧边界特征</strong>。
+            </p>
+            <p>全部候选失败时不丢整帧，而是丢 1 个字节重同步，噪声前缀不会连带吃掉后面的正常帧。</p>
+          </div>
+
+          <div class="card">
+            <span class="tag">可测试性</span>
+            <h3>硬件层越薄，能测的越多</h3>
+            <p>
+              镜像校验、元数据提交、启动决策三个模块不碰任何寄存器，Flash 访问通过
+              <code style="font-family: var(--mono); font-size: 13px">storage_if_t</code>
+              回调注入。
+            </p>
+            <p>
+              结果是：掉电这种最难的逻辑，可以在 PC 上把断电点一个一个试过去，
+              109 项断言全部在 CI 里跑，不需要板子。
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <h2>进度</h2>
+        <div class="progress-list">
+          <div class="row done">
+            <span class="m">M0</span><span class="t">骨架与工具链</span><span class="s">done</span>
+          </div>
+          <div class="row done">
+            <span class="m">M1</span><span class="t">镜像格式与打包工具</span><span class="s">done</span>
+          </div>
+          <div class="row done">
+            <span class="m">M2</span><span class="t">Bootloader 跳转</span><span class="s">done</span>
+          </div>
+          <div class="row done">
+            <span class="m">M3</span><span class="t">Flash 与元数据双备份</span><span class="s">done</span>
+          </div>
+          <div class="row now">
+            <span class="m">M4</span><span class="t">UART 升级协议</span><span class="s">next</span>
+          </div>
+          <div class="row">
+            <span class="m">M5</span><span class="t">A/B 切换与自动回滚</span><span class="s">todo</span>
+          </div>
+          <div class="row">
+            <span class="m">M6</span><span class="t">打磨与发布</span><span class="s">todo</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap">
+        <div class="links">
+          <a class="btn primary" href="https://github.com/wenjialei15/stm32-ota-bootloader">源码</a>
+          <a class="btn" href="https://github.com/wenjialei15/stm32-ota-bootloader/blob/main/docs/design.md">设计文档</a>
+          <a class="btn" href="https://github.com/wenjialei15/stm32-ota-bootloader/blob/main/docs/milestones.md">里程碑</a>
+          <a class="btn" href="https://github.com/wenjialei15/portscope">另一个项目 · PortScope</a>
+        </div>
+        <p class="colophon">
+          STM32F103C8T6 · arm-none-eabi-gcc · 纯寄存器操作 · MIT License
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
