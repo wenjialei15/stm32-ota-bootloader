@@ -1,0 +1,9 @@
+build/
+host_tests/build/
+.zigcache/
+*.o
+*.d
+*.map
+*.log
+.DS_Store
+__pycache__/

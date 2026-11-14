@@ -1,0 +1,41 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: 主机侧单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 编译并运行
+        run: make host-test
+
+  firmware:
+    name: ARM 交叉编译
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 arm-none-eabi-gcc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
+      - name: 编译 bootloader 与两份 app
+        run: make
+      - name: 查看占用
+        run: make size
+      - name: 打包镜像并校验
+        run: |
+          make images
+          python tools/ota_verify.py build/app_a.img build/app_b.img
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            build/*.bin
+            build/*.img
+            build/*.elf
