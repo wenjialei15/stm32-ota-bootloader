@@ -95,9 +95,14 @@ make            # 产出 bootloader.bin / app_a.bin / app_b.bin
 make size       # 看各镜像占用
 make images     # 生成带头的 .img
 
-# 3. 烧录（需要 st-link）
+# 3. 烧录 bootloader（需要 st-link）
 make flash
+
+# 4. 推送固件（需要 pip install pyserial）
+python tools/ota_send.py --port COM3 --image build/app_b.img
 ```
+
+推送工具会自动读镜像头判断目标槽，每帧等 ACK，超时用同序号重发。设备收到完整镜像并通过 CRC 校验后会重启并试运行新固件。
 
 ## 当前进度
 
@@ -107,7 +112,7 @@ make flash
 | M1 镜像格式与打包工具 | ✅ 完成 |
 | M2 Bootloader 跳转 | ✅ 完成 |
 | M3 Flash 与元数据双备份 | ✅ 完成 |
-| M4 UART 升级协议 | ⬜ 待做 |
+| M4 UART 升级协议 | ✅ 完成 |
 | M5 A/B 切换与回滚 | ⬜ 待做（决策逻辑已完成，缺 app 侧确认） |
 | M6 打磨与发布 | ⬜ 待做 |
 
@@ -115,11 +120,13 @@ make flash
 
 | 项 | 实测值 | 预算 |
 | --- | --- | --- |
-| Bootloader Flash | 3868 字节 | 8192（47%） |
-| Bootloader RAM | 1028 字节 | 20480（5%） |
+| Bootloader Flash | 6112 字节 | 8192（75%） |
+| Bootloader RAM | 5196 字节 | 20480（25%） |
 | 应用固件 | 1520 字节 | 24544（6%） |
-| 主机测试 | 109 项断言，0 失败 | — |
+| 主机测试 | 159 项断言，0 失败 | — |
 | 掉电注入点 | 6 个时机全部恢复 | — |
+
+协议层吃掉了 4 KB 静态缓冲（帧缓冲、会话页缓冲、响应缓冲各 1 KB）。20 KB RAM 的板子上这是笔不小的开销，可以复用缓冲省下来，但会牺牲可读性——当前选择是"留 15 KB 余量，换清晰的分层"。
 
 详细拆解见 [docs/milestones.md](docs/milestones.md)，设计取舍见 [docs/design.md](docs/design.md)。
 

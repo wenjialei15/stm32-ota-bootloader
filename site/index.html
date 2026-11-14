@@ -437,6 +437,37 @@
         background: var(--surface-2);
       }
 
+      /* ---- 协议表 ---- */
+      table.cmds {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13.5px;
+      }
+
+      table.cmds th {
+        text-align: left;
+        font-weight: 500;
+        color: var(--faint);
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      table.cmds td {
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--border-soft);
+        color: var(--dim);
+        vertical-align: top;
+      }
+
+      table.cmds td:first-child {
+        font-family: var(--mono);
+        color: var(--text);
+        white-space: nowrap;
+      }
+
       /* ---- 页脚 ---- */
       footer {
         padding: 48px 0 64px;
@@ -539,15 +570,15 @@
 
         <div class="metrics">
           <div class="metric">
-            <span class="value">3868<span class="unit">B</span></span>
+            <span class="value">6112<span class="unit">B</span></span>
             <span class="label">Bootloader 占用</span>
           </div>
           <div class="metric">
-            <span class="value">1028<span class="unit">B</span></span>
+            <span class="value">5196<span class="unit">B</span></span>
             <span class="label">RAM 使用</span>
           </div>
           <div class="metric">
-            <span class="value">109</span>
+            <span class="value">159</span>
             <span class="label">主机测试断言</span>
           </div>
           <div class="metric">
@@ -696,10 +727,82 @@
             </p>
             <p>
               结果是：掉电这种最难的逻辑，可以在 PC 上把断电点一个一个试过去，
-              109 项断言全部在 CI 里跑，不需要板子。
+              159 项断言全部在 CI 里跑，不需要板子。
             </p>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <h2>升级协议</h2>
+
+        <div class="flash" style="margin-bottom: 22px">
+          <div class="flash-bar" style="height: 46px">
+            <div class="seg" style="width: 8%; background: #d29922">SOF</div>
+            <div class="seg" style="width: 10%; background: #2f81f7; color: #05101f">CMD</div>
+            <div class="seg" style="width: 10%; background: #2f81f7; color: #05101f">SEQ</div>
+            <div class="seg" style="width: 13%; background: #2f81f7; color: #05101f">LEN</div>
+            <div class="seg" style="width: 45%; background: #1f2937; color: #94a3b8">
+              PAYLOAD ≤ 1024
+            </div>
+            <div class="seg" style="width: 14%; background: #3fb950; color: #06120a">CRC32</div>
+          </div>
+        </div>
+
+        <table class="cmds">
+          <thead>
+            <tr>
+              <th>命令</th>
+              <th>作用</th>
+              <th>载荷</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>0x01 HELLO</td>
+              <td>握手</td>
+              <td>空；返回 Bootloader 版本、Flash / 页 / 槽大小</td>
+            </tr>
+            <tr>
+              <td>0x02 BEGIN</td>
+              <td>擦除目标槽</td>
+              <td>槽号(1) + 总长(4) + 整镜像 CRC32(4)</td>
+            </tr>
+            <tr>
+              <td>0x03 DATA</td>
+              <td>写一块</td>
+              <td>偏移(4) + 数据(≤1020)</td>
+            </tr>
+            <tr>
+              <td>0x04 END</td>
+              <td>校验并提交</td>
+              <td>空；通过后写元数据并重启</td>
+            </tr>
+            <tr>
+              <td>0x05 ABORT</td>
+              <td>放弃本次升级</td>
+              <td>空</td>
+            </tr>
+            <tr>
+              <td>0x06 STATUS</td>
+              <td>查询进度</td>
+              <td>空；返回已接收字节数</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p class="note" style="margin-top: 20px">
+          CRC 覆盖 CMD 到 PAYLOAD，不含 SOF。SOF 只负责让状态机找到起点，不负责完整性——它要解决的问题是「从噪声里跳出来」，不是「防篡改」。
+        </p>
+
+        <p style="margin-top: 20px">
+          <strong>重传是幂等的。</strong>主机超时重发同一序号时，Bootloader 直接回 OK 而不重复写。上层可以「无脑重发」，不必自己记状态。
+        </p>
+        <p>
+          <strong>END 从 Flash 读回重算 CRC。</strong>不用接收时累加的值。前者能发现「写进去了但内容不对」，后者只能发现传输错误——两者都要防。
+        </p>
       </div>
     </section>
 
@@ -719,11 +822,11 @@
           <div class="row done">
             <span class="m">M3</span><span class="t">Flash 与元数据双备份</span><span class="s">done</span>
           </div>
-          <div class="row now">
-            <span class="m">M4</span><span class="t">UART 升级协议</span><span class="s">next</span>
+          <div class="row done">
+            <span class="m">M4</span><span class="t">UART 升级协议</span><span class="s">done</span>
           </div>
-          <div class="row">
-            <span class="m">M5</span><span class="t">A/B 切换与自动回滚</span><span class="s">todo</span>
+          <div class="row now">
+            <span class="m">M5</span><span class="t">A/B 切换与自动回滚</span><span class="s">next</span>
           </div>
           <div class="row">
             <span class="m">M6</span><span class="t">打磨与发布</span><span class="s">todo</span>
