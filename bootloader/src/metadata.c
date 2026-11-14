@@ -130,3 +130,31 @@ int meta_commit(const storage_if_t *storage, boot_meta_t *meta)
 
     return 0;
 }
+
+int meta_confirm_boot(const storage_if_t *storage, uint32_t running_slot)
+{
+    boot_meta_t meta;
+
+    if (meta_load(storage, &meta) != 0) {
+        return -1;
+    }
+
+    /* 没有待确认的升级：正常启动，什么都不用做 */
+    if (meta.pending_slot == META_NONE) {
+        return 0;
+    }
+
+    /*
+     * 正在跑的槽不是待确认的那个，说明元数据和应用对不上。
+     * 这种情况不该盲目确认——宁可让它继续试运行，最后走回滚。
+     */
+    if ((meta.pending_slot == SLOT_B ? SLOT_B : SLOT_A) != (running_slot == SLOT_B ? SLOT_B : SLOT_A)) {
+        return -1;
+    }
+
+    meta.pending_slot = META_NONE;
+    meta.active_slot = running_slot;
+    meta.retry_count = 0u;
+
+    return meta_commit(storage, &meta);
+}

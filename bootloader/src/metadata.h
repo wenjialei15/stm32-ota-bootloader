@@ -58,4 +58,15 @@ int meta_load(const storage_if_t *storage, boot_meta_t *out);
  */
 int meta_commit(const storage_if_t *storage, boot_meta_t *meta);
 
+/*
+ * 应用启动成功后调用：把本次运行的槽确认为正式活动槽。
+ *
+ * 只有在 pending 存在、且 pending 正好是 running_slot 时才真的写 Flash。
+ * 一旦返回成功，下次上电就不会再走"试运行"路径，回滚也不会触发。
+ *
+ * 这就是整个 A/B 机制里唯一一个"只有应用自己知道答案"的时刻——
+ * Bootloader 能判断镜像完整，但判断不了固件跑起来会不会崩。
+ */
+int meta_confirm_boot(const storage_if_t *storage, uint32_t running_slot);
+
 #endif /* METADATA_H */

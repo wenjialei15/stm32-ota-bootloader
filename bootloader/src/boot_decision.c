@@ -19,6 +19,7 @@ boot_plan_t boot_plan_make(const boot_meta_t *meta, int meta_valid,
     plan.action = BOOT_ACTION_RECOVERY;
     plan.slot = 0u;
     plan.bump_retry = 0;
+    plan.clear_pending = 0;
     plan.reason = BOOT_REASON_NO_META;
 
     /* 没有可用元数据：退回"看镜像头说话"，A 优先 */
@@ -49,6 +50,12 @@ boot_plan_t boot_plan_make(const boot_meta_t *meta, int meta_valid,
                 plan.action = BOOT_ACTION_JUMP;
                 plan.slot = active;
                 plan.reason = BOOT_REASON_ROLLBACK;
+                /*
+                 * 回滚后必须清 pending。不清的话下次上电仍然命中
+                 * "retry >= 上限" 分支，虽然还是跳旧槽，但元数据永远是脏的，
+                 * STATUS 查询和后续升级都会看到矛盾状态。
+                 */
+                plan.clear_pending = 1;
             } else {
                 plan.reason = BOOT_REASON_BOTH_BAD;
             }
@@ -61,6 +68,7 @@ boot_plan_t boot_plan_make(const boot_meta_t *meta, int meta_valid,
                 plan.action = BOOT_ACTION_JUMP;
                 plan.slot = active;
                 plan.reason = BOOT_REASON_ROLLBACK;
+                plan.clear_pending = 1;
             } else {
                 plan.reason = BOOT_REASON_BOTH_BAD;
             }

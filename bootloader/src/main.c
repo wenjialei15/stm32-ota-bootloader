@@ -1,5 +1,6 @@
 #include "boot_decision.h"
 #include "flash_if.h"
+#include "flash_storage.h"
 #include "image.h"
 #include "metadata.h"
 #include "ota_proto.h"
@@ -8,34 +9,6 @@
 #include "uart.h"
 
 #include <string.h>
-
-/* ---- 把 flash_if 适配成 metadata 需要的存储接口 ---- */
-
-static int storage_read(uint32_t addr, void *buf, uint32_t len)
-{
-    return flash_read(addr, buf, len);
-}
-
-static int storage_erase(uint32_t addr, uint32_t len)
-{
-    for (uint32_t off = 0; off < len; off += FLASH_PAGE_SIZE) {
-        if (flash_erase_page(addr + off) != 0) {
-            return -1;
-        }
-    }
-    return 0;
-}
-
-static int storage_write(uint32_t addr, const void *buf, uint32_t len)
-{
-    return flash_write(addr, buf, len);
-}
-
-static const storage_if_t g_storage = {
-    storage_read,
-    storage_erase,
-    storage_write,
-};
 
 /* ---- 跳转 ---- */
 
@@ -147,7 +120,7 @@ static void ota_loop(int first_byte)
             continue;
         }
 
-        uint32_t n = ota_session_handle(&g_session, &g_frame, &g_storage, g_resp,
+        uint32_t n = ota_session_handle(&g_session, &g_frame, &g_flash_storage, g_resp,
                                         sizeof(g_resp));
         for (uint32_t i = 0; i < n; i++) {
             uart_putc((char)g_resp[i]);
@@ -174,7 +147,7 @@ int main(void)
     uart_puts("\r\n[ota-boot] " __DATE__ " " __TIME__ "\r\n");
 
     boot_meta_t meta;
-    int meta_ok = (meta_load(&g_storage, &meta) == 0);
+    int meta_ok = (meta_load(&g_flash_storage, &meta) == 0);
 
     if (meta_ok) {
         log_meta(&meta);
@@ -199,11 +172,21 @@ int main(void)
      * 试运行计数必须在跳转之前落盘。
      * 如果放到 app 里做，app 在第一行就崩了的话这个数永远加不上去，
      * 设备会无限重启在新固件上。
+     *
+     * 回滚时还要把 pending 清干净，否则元数据一直停在「待确认」，
+     * 虽然功能上不影响启动，但状态是矛盾脏的。
      */
-    if (meta_ok && plan.bump_retry != 0) {
-        meta.retry_count += 1u;
-        if (meta_commit(&g_storage, &meta) != 0) {
-            uart_puts("  warn: failed to persist retry counter\r\n");
+    if (meta_ok && (plan.bump_retry != 0 || plan.clear_pending != 0)) {
+        if (plan.bump_retry != 0) {
+            meta.retry_count += 1u;
+        }
+        if (plan.clear_pending != 0) {
+            meta.pending_slot = META_NONE;
+            meta.active_slot = plan.slot;
+            meta.retry_count = 0u;
+        }
+        if (meta_commit(&g_flash_storage, &meta) != 0) {
+            uart_puts("  warn: failed to persist boot state\r\n");
         }
     }
 

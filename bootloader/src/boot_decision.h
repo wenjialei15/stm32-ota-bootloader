@@ -19,8 +19,9 @@ typedef enum {
 
 typedef struct {
     boot_action_t action;
-    uint32_t slot;       /* action == JUMP 时有效：0 = A, 1 = B */
-    int bump_retry;      /* 是否要把 retry_count + 1 写回元数据 */
+    uint32_t slot;        /* action == JUMP 时有效：0 = A, 1 = B */
+    int bump_retry;       /* 是否要把 retry_count + 1 写回元数据 */
+    int clear_pending;    /* 回滚时需要把 pending 清掉，否则元数据永远是脏的 */
     boot_reason_t reason;
 } boot_plan_t;
 

@@ -12,6 +12,7 @@ SRCS = tests_main.c \
        test_metadata.c \
        test_boot_decision.c \
        test_ota_proto.c \
+       test_lifecycle.c \
        ../shared/crc32.c \
        ../bootloader/src/image.c \
        ../bootloader/src/metadata.c \
